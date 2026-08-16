@@ -14,7 +14,8 @@ gongchuangsai_BMH/
 ├── 打印部件/                # 3D 打印件模型（STP / STEP / SLDPRT / 3mf）
 ├── 电控程序/                # STM32F407 嵌入式工程（初赛版 / 决赛版）
 ├── 视觉程序/                # RDK X5 视觉主程序
-│   └── gongchuang_vision.py
+│   ├── gongchuang_vision.py         # 初赛
+│   └── gongchuang_vision_final.py   # 决赛
 ├── 图片/                    # 现场照片、地图、流程、评分表等
 ├── 全流程说明.md            # 系统架构、通信协议、完整任务流程
 ├── 2026年广东省工创大赛-设计文档MBH.docx
@@ -87,9 +88,12 @@ gongchuangsai_BMH/
 
 视觉端跑在 **地平线 RDK X5** 上。源码已收录：
 
-[`视觉程序/gongchuang_vision.py`](./视觉程序/gongchuang_vision.py)
+| 版本 | 文件 | 说明 |
+|------|------|------|
+| 初赛 | [`视觉程序/gongchuang_vision.py`](./视觉程序/gongchuang_vision.py) | 二维码、转盘物块、色环、码垛 |
+| 决赛 | [`视觉程序/gongchuang_vision_final.py`](./视觉程序/gongchuang_vision_final.py) | 初赛能力 + 固定物料区三工位 + 成品区 Code128 转盘 |
 
-STM32 通过 UART 下发单字节任务码，RDK X5 完成识别后按同一帧格式回传坐标、颜色或任务码。颜色约定：`1` 红、`2` 绿、`3` 蓝。
+STM32 通过 UART 下发单字节任务码，RDK X5 完成识别后按同一帧格式回传坐标、颜色或任务码。颜色约定：`1` 红、`2` 绿、`3` 蓝。决赛成品区条码 `1/2/3` 是独立编号，不走颜色映射。
 
 ### 4.1 运行环境
 
@@ -101,15 +105,16 @@ STM32 通过 UART 下发单字节任务码，RDK X5 完成识别后按同一帧�
 | 依赖 | `opencv-python`、`numpy`、`pyserial`、`pyzbar` |
 | 串口 | `/dev/ttyUSB0`，9600 8N1 |
 | 下摄像头 | `/dev/video0`，扫任务二维码 |
-| 上摄像头 | `/dev/video2`，物块、色环、码垛定标 |
+| 上摄像头 | `/dev/video2`，物块、色环、码垛、物料区和成品区条码 |
 | OpenCV | 打开优化，8 线程 |
 
-定标时上摄像头按 MJPEG、30 FPS、双缓冲协商分辨率。物块/色环粗定标用 `640×480`，色环精细定标切到 `1920×1080`。
+定标时上摄像头按 MJPEG、30 FPS、双缓冲协商分辨率。物块/色环粗定标用 `640×480`，色环精细定标切到 `1920×1080`。决赛里 `/dev/video2` 由 `ensure_video2_camera()` 统一复用，避免重复打开。
 
 板端启动：
 
 ```bash
-python3 gongchuang_vision.py
+python3 gongchuang_vision.py          # 初赛
+python3 gongchuang_vision_final.py    # 决赛
 ```
 
 程序起来后先发 `987654321`，表示视觉端就绪，然后循环等 STM32 指令。
@@ -128,8 +133,8 @@ python3 gongchuang_vision.py
 |------|------|------|
 | 任务码 | `132+3120` 一类 7 位码再补齐 | 二维码识别结果 |
 | 物块/色环坐标 | `XXXXYYYYC` | X、Y 各 4 位，C 为颜色 |
-| 转盘抓取顺序 | `ABC456789` | 三个物块相对位置 |
-| 就绪 / 确认 | `987654321` | 上电就绪，或物块颜色确认稳定 |
+| 转盘 / 物料 / 条码夹取顺序 | `ABC456789` | 三个工位相对位置 |
+| 就绪 / 确认 | `987654321` | 上电就绪，或颜色/条码确认稳定 |
 | 超时 / 失败 | `000000004` | 本次识别失败 |
 
 更细的阶段约定见 [`全流程说明.md`](./全流程说明.md) 第三、四、五章。
@@ -146,11 +151,17 @@ python3 gongchuang_vision.py
 | `5` / `6` | `run_wukuaiyuanxin_xuanzequyu()` | 第一圈抓完第 1、2 个后，确认下一个物块到了 |
 | `b` / `c` | `run_wukuaiyuanxin_xuanzequyu()` | 第二圈同样确认后两个物块 |
 | `7` | `run_sehuanyuanxin2()` | 色环第一次粗定标，`640×480` |
-| `d` | 当前直接回 `000000000` | 预留直线纠偏，现场未启用 |
 | `8` | `run_sehuanyuanxin2_centered()` | 色环精细定标：半分辨率粗检 + 全分辨率局部精修 |
 | `9` / `0` | `run_maduoyuanxin2()` | 码垛圆环定标 |
+| `d` | `yunxing_tiaoxingma_dingbiao()` | **决赛** 成品区 Code128 首次定标，回 `XXXXYYYYC` |
+| `e` | `yunxing_tiaoxingma_zhuanpan()` | **决赛** 等条码变化，判向后回三次夹取位置 |
+| `f` / `g` | `yunxing_tiaoxingma_xuanzequyu()` | **决赛** 确认条码 `2`、`3` 已到夹取位 |
+| `h` | `run_maduoyuanxin2()` | **决赛** 固定物料区定标 |
+| `i` | `yunxing_sangeyuanxin_shibie_q123()` | **决赛** 识别 Q1/Q2/Q3，按当前轮任务码回夹取顺序 |
 | `r` | `restart_program()` | 关串口，20 秒后重启视觉程序 |
 | `end` | 退出主循环 | 本轮任务结束 |
+
+初赛里 `d` 只回 `000000000`，直线纠偏没启用。决赛把 `d/e/f/g` 改成成品区条码流程，`h/i` 是固定物料区。
 
 ### 4.4 识别思路
 
@@ -159,9 +170,11 @@ python3 gongchuang_vision.py
 - **三个物块颜色**：先看左下 A1、右下 A2，A3 用排除法补出来，再对照任务码算抓取顺序。
 - **色环粗定标**：全图找圆，限制在画面中部有效区，颜色和位置累计稳定后发送。
 - **色环精定标**：先在中心合法区内半分辨率粗找，再切回 `1920×1080` 局部精修圆心。
-- **码垛**：圆环更小，半径大约 `20~27`，稳定逻辑和色环粗定标接近。
+- **码垛 / 物料区定标**：圆环更小，半径大约 `20~27`。
+- **固定物料区（决赛 `h/i`）**：Q1/Q2/Q3 三个固定工位只看颜色。任务 `i` 第一轮对照二维码 `A1/A2/A3`，第二轮对照 `A4/A5/A6`，回 `ABC456789`。
+- **成品区 Code128（决赛 `d/e/f/g`）**：`pyzbar` 只解 Code128。`d` 记下当前条码和圆心；`e` 等条码变化后，按左下/右下/上方三个位置判向，目标顺序固定为 `1→2→3`；`f/g` 再确认后两个条码到了。
 
-上摄像头在 RDK X5 上通常只能占一路。任务 `7`、`9` 会复用已经打开的 `/dev/video2`，避免重复打开失败。
+上摄像头在 RDK X5 上通常只能占一路。决赛用 `ensure_video2_camera()` 共用 `/dev/video2`，避免重复打开失败。
 
 ### 4.5 依赖安装
 
@@ -220,7 +233,8 @@ sudo usermod -aG dialout,video $USER
 |-----------|------|
 | 系统架构与通信协议 | [`全流程说明.md`](./全流程说明.md) 第一、三章 |
 | 完整任务流程（9 阶段） | [`全流程说明.md`](./全流程说明.md) 第四、六章 |
-| 视觉主程序 | [`视觉程序/gongchuang_vision.py`](./视觉程序/gongchuang_vision.py) |
+| 初赛视觉主程序 | [`视觉程序/gongchuang_vision.py`](./视觉程序/gongchuang_vision.py) |
+| 决赛视觉主程序 | [`视觉程序/gongchuang_vision_final.py`](./视觉程序/gongchuang_vision_final.py) |
 | 底层运动控制代码 | [`电控程序/BMH-决赛/USER/`](./电控程序/BMH-决赛/USER/) |
 | 机械结构三维模型 | [`结构件/`](./结构件/) 与 [`打印部件/`](./打印部件/) |
 | 现场照片与评分标准 | [`图片/`](./图片/) |
