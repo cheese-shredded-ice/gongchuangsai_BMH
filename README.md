@@ -6,6 +6,8 @@
 
 > 项目主控：STM32F407（底层运动控制）＋ 地瓜派RDK X5（视觉识别），麦轮底盘 + 舵机机械臂 + CAN 总线电机。
 
+> 本工程基于 [gcs-gold-medal](https://github.com/yuanxiexie531-glitch/gcs-gold-medal) 开源项目。
+
 ---
 
 ## 一、仓库结构总览
